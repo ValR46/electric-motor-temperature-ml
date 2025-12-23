@@ -1,0 +1,252 @@
+% Revised LaTeX Report for Electric Motor Temperature Project (Error-Fixed)
+\documentclass[a4paper,12pt]{article}
+
+% Packages
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{graphicx}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{amsmath}
+
+% Page layout
+\geometry{
+  a4paper,
+  total={170mm,257mm},
+  left=20mm,
+  top=20mm,
+}
+
+\title{\textbf{Electric Motor Temperature Prediction using Machine Learning}}
+\author{Valentin Ruillon et Luca Sormani}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This report presents a complete Machine Learning workflow designed to estimate the internal Permanent Magnet (PM) temperature of a Permanent Magnet Synchronous Motor (PMSM). Using a large experimental dataset (2~Hz sampling, $\sim 1.3$ million samples), we perform exploratory analysis, preprocessing, dimensionality reduction, and model comparison. Linear, regularized, and ensemble learning models are evaluated under strict time-series constraints to avoid data leakage. The study highlights the domain-specific behavior of thermal variables and the unexpected superiority of regularized linear models over tree-based ensembles when generalizing to unseen driving profiles.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Business Case}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\subsection{Objective}
+The goal of this project is to predict the temperature of the Permanent Magnet (PM) inside an electric motor using non-invasive sensor measurements such as stator temperatures, electrical variables ($i_d, i_q, u_d, u_q$), and rotational speed. Since direct measurement of rotor temperature is technically challenging and costly, a virtual sensor based on data-driven modelling offers a cost-effective and reliable alternative.
+
+\subsection{Industrial Relevance}
+Monitoring rotor temperature is critical in electric vehicles and industrial drives. Excessive PM temperature may cause partial demagnetization, leading to irreversible torque loss. Conventional temperature sensors cannot be mounted on the rotor without mechanical complexity and reliability issues. A Machine Learning-based virtual sensor can:
+\begin{itemize}
+    \item reduce hardware costs,
+    \item improve reliability by removing vulnerable sensors,
+    \item enable real-time estimation in embedded systems.
+\end{itemize}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Dataset Description}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\subsection{Source}
+The dataset used in this work is the \textit{Electric Motor Temperature} dataset made available by Paderborn University and published on Kaggle:\\
+\url{https://www.kaggle.com/datasets/wkirgsn/electric-motor-temperature}
+
+\subsection{Structure of the Dataset}
+The dataset consists of approximately $\sim 1.3$ million samples collected from multiple driving cycles with a sampling frequency of 2~Hz. Each driving cycle is identified by a unique identifier \texttt{profile\_id}. The main variables include:
+
+\begin{itemize}
+    \item \textbf{Ambient and coolant temperatures},
+    \item \textbf{Electrical inputs}: $u_d, u_q, i_d, i_q$,
+    \item \textbf{Mechanical inputs}: motor speed,
+    \item \textbf{Stator temperatures}: yoke, tooth, and winding,
+    \item \textbf{Target}: \texttt{pm} (Permanent Magnet temperature).
+\end{itemize}
+
+Table~\ref{tab:dsstats} summarizes basic dataset statistics.
+
+\begin{table}[H]
+    \centering
+    \begin{tabular}{lr}
+        \toprule
+        \textbf{Statistic} & \textbf{Value} \\
+        \midrule
+        Number of samples & $\sim 1{,}300{,}000$ \\
+        Number of features & 12 \\
+        Number of driving profiles (\texttt{profile\_id}) & 290 \\
+        Sampling frequency & 2 Hz \\
+        Missing values & 0 (Dataset is complete) \\
+        \bottomrule
+    \end{tabular}
+    \caption{Summary of dataset characteristics.}
+    \label{tab:dsstats}
+\end{table}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Data Exploration}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\subsection{Correlation Analysis}
+A correlation matrix was computed to identify linear dependencies between variables. The stator temperatures (winding, tooth, and yoke) show strong positive correlation with the PM temperature, which is consistent with known thermal diffusion mechanisms in PMSMs.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{correlation.png}
+    \caption{Correlation heatmap of all features.}
+    \label{fig:corr}
+\end{figure}
+
+\subsection{Target Distribution}
+The PM temperature distribution exhibits multiple modes, each corresponding to different operating profiles or thermal regimes.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.75\textwidth]{distribution.png}
+    \caption{Distribution of the Permanent Magnet temperature.}
+    \label{fig:pm_dist}
+\end{figure}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Formalization of the Predictive Problem}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+The task is formalized as a \textbf{supervised regression} problem. The model learns a function:
+\begin{equation}
+    \hat{y} = f(X),
+\end{equation}
+that maps sensor readings $X$ to the continuous PM temperature $y$.
+
+The main performance metric is the Root Mean Square Error (RMSE):
+\begin{equation}
+    \text{RMSE} = \sqrt{ \frac{1}{N} \sum_{i=1}^{N} (y_i - \hat{y}_i)^2 },
+\end{equation}
+which penalizes large errors. RMSE is emphasized here because large temperature estimation errors may create operational risk (e.g., overheating or demagnetization).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Obstacles and Mitigation Strategies}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\subsection{Avoiding Data Leakage in Time-Series Data}
+A standard random train-test split would incorrectly mix samples from the same driving cycle in both sets, creating a strong data leakage effect. To prevent this, the split was performed using \texttt{GroupShuffleSplit} on the \texttt{profile\_id}, ensuring that each driving session appears exclusively in either training or testing.
+
+\subsubsection{Train/Test Split Details (Group-Aware)}
+The dataset was split at the profile level using a group-aware strategy with an 80/20 ratio (train/test). In our run, this corresponds to \textbf{55 training profiles} and \textbf{14 testing profiles} (total: 69 profiles). Due to unequal profile lengths, the effective test set represents approximately 22.9\% of the total samples.
+
+
+\subsection{Hardware Constraints and Dataset Scale}
+The dataset contains $\sim 1.3$ million rows, which imposes memory constraints during training of tree-based ensemble models. To avoid memory overflow:
+\begin{itemize}
+    \item all numerical columns were cast to \texttt{float32},
+    \item Random Forest depth was limited to a safe range (e.g., \texttt{max\_depth=15}),
+    \item XGBoost was configured with \texttt{tree\_method=hist} and early stopping.
+\end{itemize}
+
+\subsection{Overfitting and Underfitting}
+Linear models were regularized using Ridge Regression. Learning curves and residual analysis were used to diagnose remaining overfitting.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Dimensionality Reduction}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+Principal Component Analysis (PCA) was applied to explore latent structure and reduce redundancy. PCA was used solely as an exploratory tool (variance structure and redundancy); it was not used in the final predictive pipeline because the full feature set yielded better test performance.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.75\textwidth]{pca_scree.png}
+    \caption{Explained variance per PCA component.}
+    \label{fig:pca}
+\end{figure}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Modeling Approach}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+The following models were evaluated:
+\begin{enumerate}
+    \item \textbf{Naïve Mean Predictor} (context baseline): predicts the mean PM temperature from the training set,
+    \item \textbf{Linear Regression},
+    \item \textbf{Ridge Regression} with hyperparameter tuning over $\alpha$,
+    \item \textbf{Random Forest Regressor},
+    \item \textbf{XGBoost Regressor}.
+\end{enumerate}
+
+All hyperparameter searches were performed using group-aware cross-validation to prevent leakage across driving profiles.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Model Comparison}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{table}[H]
+    \centering
+    \begin{tabular}{lccc}
+        \toprule
+        \textbf{Model} & \textbf{RMSE} & \textbf{MAE} & \textbf{R$^2$} \\
+        \midrule
+        Na\"ive Mean Baseline & 19.42 & 16.43 & -0.005 \\
+        Ridge Regression & \textbf{6.43} & 4.93 & 0.89 \\
+        XGBoost & 7.71 & 5.85 & 0.84 \\
+        Random Forest & 8.63 & 6.17 & 0.80 \\
+        \bottomrule
+    \end{tabular}
+    \caption{Comparison of model performance on the test set.}
+    \label{tab:model_comp}
+\end{table}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.75\textwidth]{rmse_model_comparison.png}
+    \caption{RMSE of all evaluated models (including the na\"ive baseline).}
+    \label{fig:rmse_comp}
+\end{figure}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Conclusion}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+The project demonstrates that a relatively simple regularized linear model (Ridge Regression) provides the best generalization performance when predicting PM temperature from stator and electrical features.
+
+Ridge generalizes better in this context because the underlying thermal physics are mostly linear in steady-state operation. Conversely, tree-based models (XGBoost, Random Forest) may struggle to extrapolate outside the distribution of the training profiles, leading to higher errors on unseen driving cycles.
+
+The final model provides an efficient, interpretable, and computationally light virtual sensor suitable for deployment in embedded systems.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Reproducibility Notes}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\subsection{Software Versions}
+The following versions were used in this project:
+\begin{itemize}
+    \item Python 3.x
+    \item NumPy 1.26.4
+    \item Pandas 2.2.2
+    \item Scikit-Learn 1.5.1
+    \item XGBoost 3.1.2
+\end{itemize}
+
+\subsection{Environment Setup}
+To reproduce the environment without providing a \texttt{requirements.txt}, install the core dependencies directly:
+\begin{verbatim}
+pip install numpy==1.26.4 pandas==2.2.2 scikit-learn==1.5.1 xgboost==3.1.2 matplotlib
+\end{verbatim}
+
+All experiments were executed with a fixed random seed to ensure stability:
+\begin{verbatim}
+np.random.seed(42)
+\end{verbatim}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{References}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{itemize}
+    \item Kirchg\"assner, W., Wallscheid, O., \& B\"ocker, J. (2021). \textit{Deep Residual Convolutional and Recurrent Neural Networks for Temperature Estimation in Permanent Magnet Synchronous Motors}.
+    \item Kaggle Dataset: \url{https://www.kaggle.com/datasets/wkirgsn/electric-motor-temperature}
+    \item Scikit-Learn Documentation.
+\end{itemize}
+
+\end{document}

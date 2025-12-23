@@ -1,0 +1,22 @@
+# Large datasets
+*.csv
+*.zip
+*.7z
+data/
+datasets/
+
+# Jupyter
+.ipynb_checkpoints/
+__pycache__/
+
+# Python
+*.pyc
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# OS
+Thumbs.db
+.DS_Store
